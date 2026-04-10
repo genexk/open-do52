@@ -1,27 +1,43 @@
 /*
- * Custom pointing device driver that wraps QMK's PS/2 mouse.
+ * Custom pointing device driver wrapping PS/2 busywait for split forwarding.
  *
- * QMK's PS/2 mouse support is standalone and doesn't integrate with the
- * pointing device framework. This driver bridges the two so that
- * SPLIT_POINTING_ENABLE can forward trackpoint data between halves.
+ * QMK's built-in PS2_MOUSE doesn't integrate with the pointing device
+ * framework, so SPLIT_POINTING_ENABLE can't forward data between halves.
+ * This driver bridges PS/2 ↔ pointing device to enable:
  *
- * When the right half is USB host: PS/2 → pointing device → USB (direct)
- * When the left half is USB host:  PS/2 → pointing device → serial → USB
+ *   Right half USB host: PS/2 → pointing device → USB (direct)
+ *   Left half USB host:  PS/2 → pointing device → serial → USB
+ *
+ * PS/2 is initialized only on the right half (where the TrackPoint lives).
+ * We use remote mode and poll explicitly each scan cycle.
  */
 
 #include "quantum.h"
 #include "pointing_device.h"
-#include "ps2_mouse.h"
 #include "ps2.h"
+#include "ps2_mouse.h"
+#include "wait.h"
+#include "print.h"
 
 static bool ps2_initialized = false;
 
-void pointing_device_driver_init(void) {
+bool pointing_device_driver_init(void) {
     /* Only initialize PS/2 on the right half (where the TrackPoint is wired) */
     if (!is_keyboard_left()) {
-        ps2_mouse_init();
+        ps2_host_init();
+        wait_ms(PS2_MOUSE_INIT_DELAY);
+
+        /* Reset mouse */
+        PS2_MOUSE_SEND(PS2_MOUSE_RESET, "tp: reset");
+        PS2_MOUSE_RECEIVE("tp: BAT");
+        PS2_MOUSE_RECEIVE("tp: DevID");
+
+        /* Remote mode — we poll explicitly in get_report */
+        PS2_MOUSE_SEND(PS2_MOUSE_SET_REMOTE_MODE, "tp: remote mode");
+
         ps2_initialized = true;
     }
+    return true;
 }
 
 report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
@@ -29,44 +45,43 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
         return mouse_report;
     }
 
-    /* Read PS/2 data — ps2_mouse_read_report fills the global ps2_mouse_report */
-    uint8_t data[PS2_MOUSE_READ_SIZE];
-    if (ps2_host_recv() == -1) {
+    /* Poll TrackPoint (remote mode: send READ_DATA, expect ACK + 3 bytes) */
+    uint8_t rcv = ps2_host_send(PS2_MOUSE_READ_DATA);
+    if (rcv != PS2_ACK) {
         return mouse_report;
     }
 
-    /* Use PS/2 low-level read to get movement data */
-    data[0] = ps2_host_recv();
-    if (data[0] == -1) {
-        return mouse_report;
-    }
-    data[1] = ps2_host_recv();
-    data[2] = ps2_host_recv();
+    /* Read 3-byte PS/2 mouse packet */
+    uint8_t buttons_raw = ps2_host_recv_response();
+    int8_t  x_raw       = (int8_t)ps2_host_recv_response();
+    int8_t  y_raw       = (int8_t)ps2_host_recv_response();
 
-    /* Parse PS/2 mouse packet */
-    /* Byte 0: Y overflow | X overflow | Y sign | X sign | 1 | Middle | Right | Left */
-    /* Byte 1: X movement */
-    /* Byte 2: Y movement */
+    /* Sign-extend and clamp to [-127, 127] using PS/2 9-bit sign bits */
+    bool x_neg = buttons_raw & (1 << PS2_MOUSE_X_SIGN);
+    bool x_ovf = buttons_raw & (1 << PS2_MOUSE_X_OVFLW);
+    bool y_neg = buttons_raw & (1 << PS2_MOUSE_Y_SIGN);
+    bool y_ovf = buttons_raw & (1 << PS2_MOUSE_Y_OVFLW);
 
-    uint8_t buttons = data[0] & 0x07;
-    int16_t x = (data[0] & (1 << 4)) ? (int16_t)data[1] - 256 : data[1];
-    int16_t y = (data[0] & (1 << 5)) ? (int16_t)data[2] - 256 : data[2];
+    int8_t x = x_neg ? ((!x_ovf && x_raw >= -127 && x_raw <= -1) ? x_raw : -127)
+                      : ((!x_ovf && x_raw >= 0 && x_raw <= 127) ? x_raw : 127);
+    int8_t y = y_neg ? ((!y_ovf && y_raw >= -127 && y_raw <= -1) ? y_raw : -127)
+                      : ((!y_ovf && y_raw >= 0 && y_raw <= 127) ? y_raw : 127);
 
-    /* Apply rotation (270 degrees: x' = y, y' = -x) */
-    int16_t rotated_x = y;
-    int16_t rotated_y = -x;
+    /* Invert Y (PS/2 Y-axis is inverted relative to USB HID) */
+    y = -y;
 
-    mouse_report.x = (int8_t)(rotated_x > 127 ? 127 : (rotated_x < -127 ? -127 : rotated_x));
-    mouse_report.y = (int8_t)(rotated_y > 127 ? 127 : (rotated_y < -127 ? -127 : rotated_y));
-    mouse_report.buttons = buttons;
+    /* Rotate 270 degrees for TrackPoint orientation: x' = -y, y' = x */
+    mouse_report.x       = -y;
+    mouse_report.y       = x;
+    mouse_report.buttons = buttons_raw & PS2_MOUSE_BTN_MASK;
 
     return mouse_report;
 }
 
 uint16_t pointing_device_driver_get_cpi(void) {
-    return 0; /* CPI not directly applicable to PS/2 TrackPoint */
+    return 0;
 }
 
 void pointing_device_driver_set_cpi(uint16_t cpi) {
-    /* TrackPoint sensitivity is handled via PS/2 0xE2 command in open_do52.c */
+    /* TrackPoint sensitivity is handled via PS/2 commands in open_do52.c */
 }

@@ -10,6 +10,24 @@
         {"name": "Sens+", "title": "TrackPoint Sensitivity Up", "shortName": "S+"},
         {"name": "Sens-", "title": "TrackPoint Sensitivity Down", "shortName": "S-"}
     ],
+    "menus": [
+        {
+            "label": "TrackPoint",
+            "content": [
+                {
+                    "label": "Settings",
+                    "content": [
+                        {
+                            "label": "Sensitivity",
+                            "type": "range",
+                            "options": [1, 255],
+                            "content": ["id_custom_channel", 1, 1]
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
     "layouts": {
         "keymap": [
             [
