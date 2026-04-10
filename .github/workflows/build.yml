@@ -1,0 +1,152 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'keyboards/**'
+      - 'via/**'
+  pull_request:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      keymap:
+        description: 'Keymap to build'
+        required: true
+        default: 'via'
+        type: choice
+        options:
+          - via
+          - default
+      dpad_mode:
+        description: 'DPAD mode'
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+      create_release:
+        description: 'Create a GitHub release with the hex file'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  # CI check on push/PR — verify both keymaps compile
+  ci:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        keymap: [default, via]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QMK CLI
+        run: |
+          python3 -m pip install --user qmk
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Setup QMK
+        run: qmk setup -y -H ~/qmk_firmware
+
+      - name: Symlink keyboard
+        run: ln -s "$GITHUB_WORKSPACE/keyboards/open_do52" ~/qmk_firmware/keyboards/open_do52
+
+      - name: Compile ${{ matrix.keymap }}
+        run: cd ~/qmk_firmware && qmk compile -kb open_do52 -km ${{ matrix.keymap }}
+
+  # Manual build with configurable parameters
+  build:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      hex_filename: ${{ steps.hex.outputs.filename }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QMK CLI
+        run: |
+          python3 -m pip install --user qmk
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Setup QMK
+        run: qmk setup -y -H ~/qmk_firmware
+
+      - name: Symlink keyboard
+        run: ln -s "$GITHUB_WORKSPACE/keyboards/open_do52" ~/qmk_firmware/keyboards/open_do52
+
+      - name: Compile firmware
+        run: |
+          cd ~/qmk_firmware
+          if [ "${{ inputs.dpad_mode }}" != "0" ]; then
+            qmk compile -kb open_do52 -km "${{ inputs.keymap }}" -e "DPAD_MODE=${{ inputs.dpad_mode }}"
+          else
+            qmk compile -kb open_do52 -km "${{ inputs.keymap }}"
+          fi
+
+      - name: Prepare hex file
+        id: hex
+        run: |
+          KEYMAP="${{ inputs.keymap }}"
+          DPAD_MODE="${{ inputs.dpad_mode }}"
+          SRC=~/qmk_firmware/open_do52_${KEYMAP}.hex
+
+          if [ "$DPAD_MODE" = "0" ]; then
+            FILENAME="open_do52_${KEYMAP}.hex"
+          else
+            FILENAME="open_do52_${KEYMAP}_dpad${DPAD_MODE}.hex"
+          fi
+
+          cp "$SRC" "$GITHUB_WORKSPACE/$FILENAME"
+          echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: ${{ steps.hex.outputs.filename }}
+
+  # Create GitHub release when requested
+  release:
+    needs: build
+    if: inputs.create_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: release/
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          TAG="v$(date -u +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Firmware ${{ steps.tag.outputs.tag }}"
+          body: |
+            **Build parameters:**
+            - Keymap: `${{ inputs.keymap }}`
+            - DPAD mode: `${{ inputs.dpad_mode }}`
+
+            Flash with:
+            ```
+            qmk flash -kb open_do52 -km ${{ inputs.keymap }}
+            ```
+            Or flash the attached `.hex` directly with avrdude / QMK Toolbox.
+          files: release/*
