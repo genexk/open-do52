@@ -10,6 +10,14 @@ POINTING_DEVICE_ENABLE = yes
 POINTING_DEVICE_DRIVER = custom
 SRC += ps2_pointing.c
 
+# EE_HANDS init — bake left/right identity into firmware for QMK Toolbox users
+ifeq ($(strip $(INIT_EE_HANDS_LEFT)),yes)
+    OPT_DEFS += -DINIT_EE_HANDS_LEFT
+endif
+ifeq ($(strip $(INIT_EE_HANDS_RIGHT)),yes)
+    OPT_DEFS += -DINIT_EE_HANDS_RIGHT
+endif
+
 # DPAD mode — pass to C preprocessor and configure encoder if mode 2
 ifneq ($(strip $(DPAD_MODE)),)
     OPT_DEFS += -DDPAD_MODE=$(strip $(DPAD_MODE))

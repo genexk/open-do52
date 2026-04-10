@@ -29,7 +29,7 @@ on:
           - '1'
           - '2'
       create_release:
-        description: 'Create a GitHub release with the hex file'
+        description: 'Create a GitHub release with the hex files'
         required: false
         default: false
         type: boolean
@@ -64,12 +64,10 @@ jobs:
       - name: Compile ${{ matrix.keymap }}
         run: cd ~/qmk_firmware && qmk compile -kb open_do52 -km ${{ matrix.keymap }}
 
-  # Manual build with configurable parameters
+  # Manual build — produces left and right hex files
   build:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    outputs:
-      hex_filename: ${{ steps.hex.outputs.filename }}
 
     steps:
       - uses: actions/checkout@v4
@@ -88,36 +86,49 @@ jobs:
       - name: Symlink keyboard
         run: ln -s "$GITHUB_WORKSPACE/keyboards/open_do52" ~/qmk_firmware/keyboards/open_do52
 
-      - name: Compile firmware
+      - name: Build left-hand firmware
         run: |
           cd ~/qmk_firmware
+          EXTRA_ARGS=""
           if [ "${{ inputs.dpad_mode }}" != "0" ]; then
-            qmk compile -kb open_do52 -km "${{ inputs.keymap }}" -e "DPAD_MODE=${{ inputs.dpad_mode }}"
-          else
-            qmk compile -kb open_do52 -km "${{ inputs.keymap }}"
+            EXTRA_ARGS="-e DPAD_MODE=${{ inputs.dpad_mode }}"
           fi
+          qmk compile -kb open_do52 -km "${{ inputs.keymap }}" \
+            -e INIT_EE_HANDS_LEFT=yes $EXTRA_ARGS
 
-      - name: Prepare hex file
-        id: hex
+      - name: Rename left hex
         run: |
           KEYMAP="${{ inputs.keymap }}"
-          DPAD_MODE="${{ inputs.dpad_mode }}"
-          SRC=~/qmk_firmware/open_do52_${KEYMAP}.hex
+          DPAD="${{ inputs.dpad_mode }}"
+          SUFFIX=""
+          [ "$DPAD" != "0" ] && SUFFIX="_dpad${DPAD}"
+          cp ~/qmk_firmware/open_do52_${KEYMAP}.hex \
+             "$GITHUB_WORKSPACE/open_do52_${KEYMAP}${SUFFIX}_left.hex"
 
-          if [ "$DPAD_MODE" = "0" ]; then
-            FILENAME="open_do52_${KEYMAP}.hex"
-          else
-            FILENAME="open_do52_${KEYMAP}_dpad${DPAD_MODE}.hex"
+      - name: Build right-hand firmware
+        run: |
+          cd ~/qmk_firmware
+          EXTRA_ARGS=""
+          if [ "${{ inputs.dpad_mode }}" != "0" ]; then
+            EXTRA_ARGS="-e DPAD_MODE=${{ inputs.dpad_mode }}"
           fi
+          qmk compile -kb open_do52 -km "${{ inputs.keymap }}" \
+            -e INIT_EE_HANDS_RIGHT=yes $EXTRA_ARGS
 
-          cp "$SRC" "$GITHUB_WORKSPACE/$FILENAME"
-          echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+      - name: Rename right hex
+        run: |
+          KEYMAP="${{ inputs.keymap }}"
+          DPAD="${{ inputs.dpad_mode }}"
+          SUFFIX=""
+          [ "$DPAD" != "0" ] && SUFFIX="_dpad${DPAD}"
+          cp ~/qmk_firmware/open_do52_${KEYMAP}.hex \
+             "$GITHUB_WORKSPACE/open_do52_${KEYMAP}${SUFFIX}_right.hex"
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: ${{ steps.hex.outputs.filename }}
+          path: "*.hex"
 
   # Create GitHub release when requested
   release:
@@ -128,7 +139,7 @@ jobs:
       contents: write
 
     steps:
-      - name: Download artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: firmware
@@ -150,9 +161,12 @@ jobs:
             - Keymap: `${{ inputs.keymap }}`
             - DPAD mode: `${{ inputs.dpad_mode }}`
 
-            Flash with:
-            ```
-            qmk flash -kb open_do52 -km ${{ inputs.keymap }}
-            ```
-            Or flash the attached `.hex` directly with avrdude / QMK Toolbox.
+            **Two hex files — one per side:**
+            - `*_left.hex` — flash to the **left** half
+            - `*_right.hex` — flash to the **right** half
+
+            Open QMK Toolbox, select the correct hex for each side, put the
+            Pro Micro into bootloader mode (short RESET to GND), and flash.
+            The firmware writes its left/right identity to EEPROM on first boot.
+            After that, future updates can use the same hex for both sides.
           files: release/*
