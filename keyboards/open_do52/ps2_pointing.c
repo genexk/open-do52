@@ -70,9 +70,9 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     /* Invert Y (PS/2 Y-axis is inverted relative to USB HID) */
     y = -y;
 
-    /* Rotate 270 degrees for TrackPoint orientation: x' = -y, y' = x */
-    mouse_report.x       = -y;
-    mouse_report.y       = x;
+    /* Rotate 90 degrees for TrackPoint orientation: x' = y, y' = -x */
+    mouse_report.x       = y;
+    mouse_report.y       = -x;
     mouse_report.buttons = buttons_raw & PS2_MOUSE_BTN_MASK;
 
     return mouse_report;
