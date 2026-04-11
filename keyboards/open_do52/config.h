@@ -4,9 +4,15 @@
 #define EE_HANDS
 #define SPLIT_USB_DETECT
 
-/* PS/2 TrackPoint (right half, busywait driver) */
+/* PS/2 TrackPoint (right half, interrupt driver) */
 #define PS2_CLOCK_PIN B1
 #define PS2_DATA_PIN  B2
+
+/* PS/2 interrupt config — B1 is PCINT1 on ATmega32U4 */
+#define PS2_INT_INIT() do { PCICR |= (1 << PCIE0); } while(0)
+#define PS2_INT_ON()   do { PCMSK0 |= (1 << PCINT1); } while(0)
+#define PS2_INT_OFF()  do { PCMSK0 &= ~(1 << PCINT1); } while(0)
+#define PS2_INT_VECT   PCINT0_vect
 
 /* Pointing device on the right half */
 #define POINTING_DEVICE_RIGHT

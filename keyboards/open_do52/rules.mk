@@ -3,7 +3,7 @@ SERIAL_DRIVER = bitbang
 
 # PS/2 TrackPoint (low-level driver only — custom pointing device handles the protocol)
 PS2_ENABLE = yes
-PS2_DRIVER = busywait
+PS2_DRIVER = interrupt
 
 # Pointing device (for split forwarding)
 POINTING_DEVICE_ENABLE = yes
