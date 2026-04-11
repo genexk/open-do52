@@ -9,8 +9,9 @@
  *   Left half USB host:  PS/2 → pointing device → serial → USB
  *
  * PS/2 is initialized only on the right half (where the TrackPoint lives).
- * We use remote mode and poll explicitly, throttled to ~66Hz so the
- * split serial transport gets enough CPU time on the slave half.
+ * We use remote mode and poll explicitly. Poll rate is controlled by
+ * POINTING_DEVICE_TASK_THROTTLE_MS in config.h so the split serial
+ * transport gets enough CPU time on the slave half.
  */
 
 #include "quantum.h"
@@ -19,7 +20,6 @@
 #include "ps2_mouse.h"
 #include "wait.h"
 #include "print.h"
-#include "timer.h"
 
 static bool ps2_initialized = false;
 
@@ -46,13 +46,6 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     if (!ps2_initialized) {
         return mouse_report;
     }
-
-    /* Throttle polling to ~66Hz so split serial transport has CPU time */
-    static uint16_t last_poll = 0;
-    if (timer_elapsed(last_poll) < 15) {
-        return mouse_report;
-    }
-    last_poll = timer_read();
 
     /* Poll TrackPoint (remote mode: send READ_DATA, expect ACK + 3 bytes) */
     uint8_t rcv = ps2_host_send(PS2_MOUSE_READ_DATA);

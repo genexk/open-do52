@@ -18,7 +18,10 @@
 #define POINTING_DEVICE_RIGHT
 #define SPLIT_POINTING_ENABLE
 
-/* TrackPoint tuning — remote mode and 270° rotation handled in ps2_pointing.c */
+/* Throttle pointing device task to ~66Hz so split serial transport
+ * has CPU time on the slave half.  Unlike throttling inside get_report(),
+ * this keeps the last real report stored for transport to read. */
+#define POINTING_DEVICE_TASK_THROTTLE_MS 15
 
 /* TrackPoint sensitivity — default value (0-255), stored in EEPROM */
 #define TP_SENSITIVITY_DEFAULT 128
