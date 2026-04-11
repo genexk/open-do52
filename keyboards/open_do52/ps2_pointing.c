@@ -34,8 +34,16 @@ bool pointing_device_driver_init(void) {
         PS2_MOUSE_RECEIVE("tp: BAT");
         PS2_MOUSE_RECEIVE("tp: DevID");
 
-        /* Stream mode (default after reset) — enable data reporting */
+        /* Stream mode — match QMK's proven init sequence */
         PS2_MOUSE_SEND(PS2_MOUSE_ENABLE_DATA_REPORTING, "tp: enable");
+        PS2_MOUSE_SEND(PS2_MOUSE_SET_STREAM_MODE, "tp: stream");
+
+        /* Drain any stale bytes left from init handshake.
+         * Without this, leftover ACK/BAT/DevID bytes permanently
+         * corrupt the 3-byte packet alignment in stream mode. */
+        while (pbuf_has_data()) {
+            ps2_host_recv();
+        }
 
         ps2_initialized = true;
     }
@@ -63,6 +71,12 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     while (pbuf_has_data()) {
         uint8_t b = ps2_host_recv();
         if (ps2_error) break;
+
+        /* PS/2 byte 0 always has bit 3 set — use this to re-sync
+         * if we ever lose the 3-byte packet boundary. */
+        if (pkt_pos == 0 && !(b & 0x08)) {
+            continue;
+        }
 
         pkt[pkt_pos++] = b;
         if (pkt_pos == 3) {
