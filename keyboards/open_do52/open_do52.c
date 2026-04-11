@@ -1,5 +1,5 @@
 #include "open_do52.h"
-#include "ps2.h"
+#include "pointing_device.h"
 
 /* ---- EEPROM user config ---- */
 
@@ -12,19 +12,6 @@ typedef union {
 } user_config_t;
 
 static user_config_t user_config;
-
-/* ---- TrackPoint sensitivity via PS/2 ---- */
-
-static void tp_set_sensitivity(uint8_t sensitivity) {
-    if (is_keyboard_left()) {
-        return; /* TrackPoint is on the right half only */
-    }
-    /* TrackPoint PS/2 sensitivity command:
-     * Send 0xE2 (vendor-specific set), then 0x4A (sensitivity register), then value */
-    ps2_host_send(0xE2);
-    ps2_host_send(0x4A);
-    ps2_host_send(sensitivity);
-}
 
 /* ---- Keyboard init ---- */
 
@@ -40,8 +27,24 @@ void keyboard_post_init_kb(void) {
         user_config.tp_sensitivity = TP_SENSITIVITY_DEFAULT;
         eeconfig_update_kb(user_config.raw);
     }
-    tp_set_sensitivity(user_config.tp_sensitivity);
     keyboard_post_init_user();
+}
+
+/* ---- Software sensitivity scaling ---- */
+/*
+ * Runs on the master (USB) side after the report arrives from either
+ * the local driver or the slave half via split transport.
+ * This ensures VIA slider changes take effect immediately regardless
+ * of which side has USB connected.
+ */
+report_mouse_t pointing_device_task_kb(report_mouse_t mouse_report) {
+    if (user_config.tp_sensitivity != 128) {
+        int16_t x = ((int16_t)mouse_report.x * user_config.tp_sensitivity) / 128;
+        int16_t y = ((int16_t)mouse_report.y * user_config.tp_sensitivity) / 128;
+        mouse_report.x = (x > 127) ? 127 : (x < -127) ? -127 : (int8_t)x;
+        mouse_report.y = (y > 127) ? 127 : (y < -127) ? -127 : (int8_t)y;
+    }
+    return pointing_device_task_user(mouse_report);
 }
 
 /* ---- DPAD Mode ---- */
@@ -87,7 +90,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
                 } else {
                     user_config.tp_sensitivity = 255;
                 }
-                tp_set_sensitivity(user_config.tp_sensitivity);
                 eeconfig_update_kb(user_config.raw);
                 return false;
             case QK_KB_1: /* SENS_DN */
@@ -96,7 +98,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
                 } else {
                     user_config.tp_sensitivity = 1;
                 }
-                tp_set_sensitivity(user_config.tp_sensitivity);
                 eeconfig_update_kb(user_config.raw);
                 return false;
         }
@@ -126,7 +127,6 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
         case id_custom_set_value:
             if (*value_id == id_tp_sensitivity) {
                 user_config.tp_sensitivity = data[3];
-                tp_set_sensitivity(user_config.tp_sensitivity);
                 eeconfig_update_kb(user_config.raw);
             }
             break;
