@@ -9,9 +9,9 @@
  *   Left half USB host:  PS/2 → pointing device → serial → USB
  *
  * PS/2 is initialized only on the right half (where the TrackPoint lives).
- * We use remote mode and poll explicitly. Poll rate is controlled by
- * POINTING_DEVICE_TASK_THROTTLE_MS in config.h so the split serial
- * transport gets enough CPU time on the slave half.
+ * Stream mode: the TrackPoint sends data automatically when moved.
+ * The interrupt driver captures bytes via ISR into a ring buffer.
+ * get_report() is completely non-blocking — it just drains the buffer.
  */
 
 #include "quantum.h"
@@ -34,8 +34,8 @@ bool pointing_device_driver_init(void) {
         PS2_MOUSE_RECEIVE("tp: BAT");
         PS2_MOUSE_RECEIVE("tp: DevID");
 
-        /* Remote mode — we poll explicitly in get_report */
-        PS2_MOUSE_SEND(PS2_MOUSE_SET_REMOTE_MODE, "tp: remote mode");
+        /* Stream mode (default after reset) — enable data reporting */
+        PS2_MOUSE_SEND(PS2_MOUSE_ENABLE_DATA_REPORTING, "tp: enable");
 
         ps2_initialized = true;
     }
@@ -47,27 +47,47 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
         return mouse_report;
     }
 
-    /* Poll TrackPoint (remote mode: send READ_DATA, expect ACK + 3 bytes) */
-    uint8_t rcv = ps2_host_send(PS2_MOUSE_READ_DATA);
-    if (rcv != PS2_ACK) {
+    /*
+     * Stream mode: the TrackPoint sends 3-byte packets via interrupt.
+     * Drain the ring buffer and use the latest complete packet.
+     * Partial packets are held in the static buffer for the next call.
+     */
+    static uint8_t pkt[3];
+    static uint8_t pkt_pos = 0;
+
+    uint8_t latest_buttons = 0;
+    int8_t  latest_x       = 0;
+    int8_t  latest_y       = 0;
+    bool    has_packet      = false;
+
+    while (pbuf_has_data()) {
+        uint8_t b = ps2_host_recv();
+        if (ps2_error) break;
+
+        pkt[pkt_pos++] = b;
+        if (pkt_pos == 3) {
+            pkt_pos = 0;
+            latest_buttons = pkt[0];
+            latest_x       = (int8_t)pkt[1];
+            latest_y       = (int8_t)pkt[2];
+            has_packet     = true;
+        }
+    }
+
+    if (!has_packet) {
         return mouse_report;
     }
 
-    /* Read 3-byte PS/2 mouse packet */
-    uint8_t buttons_raw = ps2_host_recv_response();
-    int8_t  x_raw       = (int8_t)ps2_host_recv_response();
-    int8_t  y_raw       = (int8_t)ps2_host_recv_response();
-
     /* Sign-extend and clamp to [-127, 127] using PS/2 9-bit sign bits */
-    bool x_neg = buttons_raw & (1 << PS2_MOUSE_X_SIGN);
-    bool x_ovf = buttons_raw & (1 << PS2_MOUSE_X_OVFLW);
-    bool y_neg = buttons_raw & (1 << PS2_MOUSE_Y_SIGN);
-    bool y_ovf = buttons_raw & (1 << PS2_MOUSE_Y_OVFLW);
+    bool x_neg = latest_buttons & (1 << PS2_MOUSE_X_SIGN);
+    bool x_ovf = latest_buttons & (1 << PS2_MOUSE_X_OVFLW);
+    bool y_neg = latest_buttons & (1 << PS2_MOUSE_Y_SIGN);
+    bool y_ovf = latest_buttons & (1 << PS2_MOUSE_Y_OVFLW);
 
-    int8_t x = x_neg ? ((!x_ovf && x_raw >= -127 && x_raw <= -1) ? x_raw : -127)
-                      : ((!x_ovf && x_raw >= 0 && x_raw <= 127) ? x_raw : 127);
-    int8_t y = y_neg ? ((!y_ovf && y_raw >= -127 && y_raw <= -1) ? y_raw : -127)
-                      : ((!y_ovf && y_raw >= 0 && y_raw <= 127) ? y_raw : 127);
+    int8_t x = x_neg ? ((!x_ovf && latest_x >= -127 && latest_x <= -1) ? latest_x : -127)
+                      : ((!x_ovf && latest_x >= 0 && latest_x <= 127) ? latest_x : 127);
+    int8_t y = y_neg ? ((!y_ovf && latest_y >= -127 && latest_y <= -1) ? latest_y : -127)
+                      : ((!y_ovf && latest_y >= 0 && latest_y <= 127) ? latest_y : 127);
 
     /* Invert Y (PS/2 Y-axis is inverted relative to USB HID) */
     y = -y;
@@ -75,7 +95,7 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     /* Rotate 90 degrees for TrackPoint orientation: x' = y, y' = -x */
     mouse_report.x       = y;
     mouse_report.y       = -x;
-    mouse_report.buttons = buttons_raw & PS2_MOUSE_BTN_MASK;
+    mouse_report.buttons = latest_buttons & PS2_MOUSE_BTN_MASK;
 
     return mouse_report;
 }
