@@ -83,10 +83,10 @@ adjustment.
 ## TrackPoint Notes
 
 - The TrackPoint connects to the **right** half via PS/2 (pins B1 clock, B2 data)
-- Thanks to EE_HANDS + split pointing, the TrackPoint works regardless of which
-  half has USB connected
+- Currently the TrackPoint only works when USB is connected to the right half
+- Left-side USB support is in progress (requires switching from remote to stream mode)
 - Default sensitivity: 128 (adjustable 1-255 via VIA or keycodes)
-- Rotation: 270 degrees (configured in ps2_pointing.c)
+- Rotation: 90 degrees (configured in ps2_pointing.c)
 
 ## Troubleshooting
 
