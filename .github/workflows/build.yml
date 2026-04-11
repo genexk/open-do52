@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      release_name:
+        description: 'Custom release name suffix (e.g. "stable")'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   # CI check on push/PR — verify both keymaps compile
@@ -149,13 +154,17 @@ jobs:
         id: tag
         run: |
           TAG="v$(date -u +%Y%m%d-%H%M%S)"
+          SUFFIX="${{ inputs.release_name }}"
+          if [ -n "$SUFFIX" ]; then
+            TAG="${TAG}-${SUFFIX}"
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Firmware ${{ steps.tag.outputs.tag }}"
+          name: "Firmware ${{ steps.tag.outputs.tag }}${{ inputs.release_name && format(' ({0})', inputs.release_name) || '' }}"
           body: |
             **Build parameters:**
             - Keymap: `${{ inputs.keymap }}`
