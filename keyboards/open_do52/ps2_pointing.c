@@ -47,11 +47,13 @@ bool pointing_device_driver_init(void) {
         PS2_MOUSE_SEND(PS2_MOUSE_ENABLE_DATA_REPORTING, "tp: enable");
         PS2_MOUSE_SEND(PS2_MOUSE_SET_STREAM_MODE, "tp: stream");
 
-        /* Drain any stale bytes left from init handshake so they
-         * don't corrupt the 3-byte packet alignment in stream mode. */
-        while (pbuf_has_data()) {
-            ps2_host_recv();
-        }
+        /* Drain stale bytes from init, then wait for any in-flight
+         * stream packet to finish and drain that too.  A partial
+         * packet left in the buffer would permanently misalign the
+         * 3-byte framing in get_report(). */
+        while (pbuf_has_data()) ps2_host_recv();
+        wait_ms(10);
+        while (pbuf_has_data()) ps2_host_recv();
 
         ps2_initialized = true;
     }
@@ -65,8 +67,18 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
 
     /*
      * Stream mode: the TrackPoint sends 3-byte packets via interrupt.
-     * Drain the ring buffer and use the latest complete packet.
-     * Partial packets are held in the static buffer for the next call.
+     * Drain the ring buffer and use the latest VALID packet.
+     *
+     * The bitbang serial driver disables global interrupts (cli/sei)
+     * during every split transaction, which can cause PS/2 bytes to
+     * be lost or corrupted.  A single lost byte permanently shifts
+     * the 3-byte packet boundary, making movement data look like
+     * button presses and vice-versa ("cursor flies everywhere").
+     *
+     * Defence: validate byte 0 (bit 3 set, overflow clear) AND
+     * check that the sign bits in byte 0 are consistent with the
+     * sign of the movement bytes.  This rejects ~99% of misaligned
+     * or corrupted packets.
      */
     static uint8_t pkt[3];
     static uint8_t pkt_pos = 0;
@@ -80,18 +92,32 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
         uint8_t b = ps2_host_recv();
         if (ps2_error) break;
 
-        /* PS/2 byte 0 always has bit 3 set — use this to re-sync
-         * if we ever lose the 3-byte packet boundary. */
-        if (pkt_pos == 0 && !(b & 0x08)) {
-            continue;
+        if (pkt_pos == 0) {
+            /* Byte 0: bit 3 must be set (PS/2 spec "always 1"),
+             * and overflow bits (6-7) must be clear. */
+            if ((b & 0xC8) != 0x08) {
+                continue;
+            }
         }
 
         pkt[pkt_pos++] = b;
         if (pkt_pos == 3) {
             pkt_pos = 0;
+
+            int8_t x = (int8_t)pkt[1];
+            int8_t y = (int8_t)pkt[2];
+
+            /* Sign-consistency check: the sign bits in byte 0
+             * must agree with the actual sign of bytes 1-2.
+             * A misaligned packet almost never passes this. */
+            bool x_sign = pkt[0] & (1 << PS2_MOUSE_X_SIGN);
+            bool y_sign = pkt[0] & (1 << PS2_MOUSE_Y_SIGN);
+            if ((x_sign && x > 0) || (!x_sign && x < 0)) continue;
+            if ((y_sign && y > 0) || (!y_sign && y < 0)) continue;
+
             latest_buttons = pkt[0];
-            latest_x       = (int8_t)pkt[1];
-            latest_y       = (int8_t)pkt[2];
+            latest_x       = x;
+            latest_y       = y;
             has_packet     = true;
         }
     }
@@ -100,23 +126,10 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
         return mouse_report;
     }
 
-    /* Sign-extend and clamp to [-127, 127] using PS/2 9-bit sign bits */
-    bool x_neg = latest_buttons & (1 << PS2_MOUSE_X_SIGN);
-    bool x_ovf = latest_buttons & (1 << PS2_MOUSE_X_OVFLW);
-    bool y_neg = latest_buttons & (1 << PS2_MOUSE_Y_SIGN);
-    bool y_ovf = latest_buttons & (1 << PS2_MOUSE_Y_OVFLW);
-
-    int8_t x = x_neg ? ((!x_ovf && latest_x >= -127 && latest_x <= -1) ? latest_x : -127)
-                      : ((!x_ovf && latest_x >= 0 && latest_x <= 127) ? latest_x : 127);
-    int8_t y = y_neg ? ((!y_ovf && latest_y >= -127 && latest_y <= -1) ? latest_y : -127)
-                      : ((!y_ovf && latest_y >= 0 && latest_y <= 127) ? latest_y : 127);
-
-    /* Invert Y (PS/2 Y-axis is inverted relative to USB HID) */
-    y = -y;
-
-    /* Rotate 90 degrees for TrackPoint orientation: x' = y, y' = -x */
-    mouse_report.x       = y;
-    mouse_report.y       = -x;
+    /* Invert Y (PS/2 Y+ is up, USB HID Y+ is down) and
+     * rotate 90° for TrackPoint orientation: x' = y, y' = -x */
+    mouse_report.x       = -latest_y;
+    mouse_report.y       = -latest_x;
     mouse_report.buttons = latest_buttons & PS2_MOUSE_BTN_MASK;
 
     return mouse_report;
