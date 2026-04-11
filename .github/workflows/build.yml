@@ -165,22 +165,37 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Build release body
+        id: body
+        run: |
+          {
+            NOTES="${{ inputs.release_notes }}"
+            if [ -n "$NOTES" ]; then
+              echo "## Changes"
+              echo ""
+              echo "$NOTES"
+              echo ""
+              echo "---"
+              echo ""
+            fi
+            echo "**Build parameters:**"
+            echo "- Keymap: \`${{ inputs.keymap }}\`"
+            echo "- DPAD mode: \`${{ inputs.dpad_mode }}\`"
+            echo ""
+            echo "**Two hex files — one per side:**"
+            echo "- \`*_left.hex\` — flash to the **left** half"
+            echo "- \`*_right.hex\` — flash to the **right** half"
+            echo ""
+            echo "Open QMK Toolbox, select the correct hex for each side, put the"
+            echo "Pro Micro into bootloader mode (short RESET to GND), and flash."
+            echo "The firmware writes its left/right identity to EEPROM on first boot."
+            echo "After that, future updates can use the same hex for both sides."
+          } > release_body.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "Firmware ${{ steps.tag.outputs.tag }}${{ inputs.release_name && format(' ({0})', inputs.release_name) || '' }}"
-          body: |
-            ${{ inputs.release_notes && format('## Changes\n{0}\n\n---\n', inputs.release_notes) || '' }}**Build parameters:**
-            - Keymap: `${{ inputs.keymap }}`
-            - DPAD mode: `${{ inputs.dpad_mode }}`
-
-            **Two hex files — one per side:**
-            - `*_left.hex` — flash to the **left** half
-            - `*_right.hex` — flash to the **right** half
-
-            Open QMK Toolbox, select the correct hex for each side, put the
-            Pro Micro into bootloader mode (short RESET to GND), and flash.
-            The firmware writes its left/right identity to EEPROM on first boot.
-            After that, future updates can use the same hex for both sides.
+          body_path: release_body.md
           files: release/*
