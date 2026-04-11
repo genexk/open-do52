@@ -29,18 +29,26 @@ bool pointing_device_driver_init(void) {
         ps2_host_init();
         wait_ms(PS2_MOUSE_INIT_DELAY);
 
-        /* Reset mouse */
+        /* Reset mouse — device ACKs then runs self-test (300-500ms) */
         PS2_MOUSE_SEND(PS2_MOUSE_RESET, "tp: reset");
+
+        /* Wait for self-test to finish.  recv_response() only waits
+         * 25ms, but the self-test takes 300-500ms after a software
+         * reset.  Without this delay the subsequent commands arrive
+         * while the device is busy and get silently ignored — which
+         * is fatal for stream mode (ENABLE_DATA_REPORTING never
+         * takes effect, so the TrackPoint never sends data). */
+        wait_ms(500);
         PS2_MOUSE_RECEIVE("tp: BAT");
         PS2_MOUSE_RECEIVE("tp: DevID");
 
-        /* Stream mode — match QMK's proven init sequence */
+        /* Stream mode — enable data reporting, then set stream mode
+         * (matches QMK's proven init order in ps2_mouse.c) */
         PS2_MOUSE_SEND(PS2_MOUSE_ENABLE_DATA_REPORTING, "tp: enable");
         PS2_MOUSE_SEND(PS2_MOUSE_SET_STREAM_MODE, "tp: stream");
 
-        /* Drain any stale bytes left from init handshake.
-         * Without this, leftover ACK/BAT/DevID bytes permanently
-         * corrupt the 3-byte packet alignment in stream mode. */
+        /* Drain any stale bytes left from init handshake so they
+         * don't corrupt the 3-byte packet alignment in stream mode. */
         while (pbuf_has_data()) {
             ps2_host_recv();
         }
